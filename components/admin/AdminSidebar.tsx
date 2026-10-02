@@ -2,10 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
 import {
   LayoutDashboard, Store, Users, ShoppingBag, BarChart3, Settings,
-  ChevronLeft, Printer, LogOut, X
+  Printer, LogOut, X, CreditCard, Wallet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +13,8 @@ const navItems = [
   { href: '/admin/shopkeepers', label: 'Shopkeepers', icon: Store },
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/orders', label: 'Orders', icon: ShoppingBag },
+  { href: '/admin/payments', label: 'Payments', icon: CreditCard },
+  { href: '/admin/payouts', label: 'Payouts', icon: Wallet },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
 ];
 

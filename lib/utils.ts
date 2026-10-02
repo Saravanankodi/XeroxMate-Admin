@@ -2,6 +2,13 @@ import { type ClassValue, clsx } from 'clsx';
 import { OrderStatus, PaymentStatus, DeliveryType } from '@/types/order';
 import { UserStatus } from '@/types/user';
 import { ShopkeeperStatus, VerificationStatus } from '@/types/shopkeeper';
+import {
+  PaymentStatus as FinancePaymentStatus,
+  PaymentVerificationStatus,
+  PaymentMethod,
+  PayoutMethod,
+  PayoutStatus,
+} from '@/types/payment';
 
 export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
@@ -122,3 +129,91 @@ export function debounce<T extends (...args: Parameters<T>) => void>(fn: T, dela
     timer = setTimeout(() => fn(...args), delay);
   };
 }
+
+export interface ChipConfig {
+  label: string;
+  color: string;
+  bg: string;
+  border: string;
+}
+
+export function getFinancePaymentStatusConfig(status: FinancePaymentStatus): ChipConfig {
+  const configs: Record<FinancePaymentStatus, ChipConfig> = {
+    pending:               { label: 'Pending',               color: '#9ca3af', bg: 'rgba(156,163,175,0.12)', border: 'rgba(156,163,175,0.3)' },
+    verification_required: { label: 'Verification Required', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.3)' },
+    verified:              { label: 'Verified',              color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.3)' },
+    declined:              { label: 'Declined',              color: '#f87171', bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.3)' },
+    refunded:              { label: 'Refunded',              color: '#818cf8', bg: 'rgba(99,102,241,0.12)',  border: 'rgba(99,102,241,0.3)' },
+    payout_pending:        { label: 'Payout Pending',        color: '#60a5fa', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.3)' },
+    partially_paid:        { label: 'Partially Paid',        color: '#fb923c', bg: 'rgba(251,146,60,0.12)',  border: 'rgba(251,146,60,0.3)' },
+    paid_to_shopkeeper:    { label: 'Paid to Shopkeeper',    color: '#22d3ee', bg: 'rgba(34,211,238,0.12)',  border: 'rgba(34,211,238,0.3)' },
+    completed:             { label: 'Completed',             color: '#34d399', bg: 'rgba(52,211,153,0.12)',  border: 'rgba(52,211,153,0.3)' },
+  };
+  return configs[status];
+}
+
+export function getPaymentVerificationConfig(status: PaymentVerificationStatus): ChipConfig {
+  const configs: Record<PaymentVerificationStatus, ChipConfig> = {
+    pending:      { label: 'Pending',      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.3)' },
+    verified:     { label: 'Verified',     color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.3)' },
+    declined:     { label: 'Declined',     color: '#f87171', bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.3)' },
+    not_required: { label: 'Not Required', color: '#9ca3af', bg: 'rgba(156,163,175,0.12)', border: 'rgba(156,163,175,0.3)' },
+  };
+  return configs[status];
+}
+
+export function getPayoutStatusConfig(status: PayoutStatus): ChipConfig {
+  const configs: Record<PayoutStatus, ChipConfig> = {
+    requested:   { label: 'Requested',   color: '#60a5fa', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.3)' },
+    under_review:{ label: 'Under Review',color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.3)' },
+    approved:    { label: 'Approved',    color: '#818cf8', bg: 'rgba(99,102,241,0.12)',  border: 'rgba(99,102,241,0.3)' },
+    processing:  { label: 'Processing',  color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  border: 'rgba(168,85,247,0.3)' },
+    completed:   { label: 'Completed',   color: '#10b981', bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.3)' },
+    rejected:    { label: 'Rejected',    color: '#f87171', bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.3)' },
+    cancelled:   { label: 'Cancelled',   color: '#9ca3af', bg: 'rgba(156,163,175,0.12)', border: 'rgba(156,163,175,0.3)' },
+    failed:      { label: 'Failed',      color: '#ef4444', bg: 'rgba(239,68,68,0.14)',   border: 'rgba(239,68,68,0.34)' },
+  };
+  return configs[status];
+}
+
+export function getPaymentMethodConfig(method: PaymentMethod): ChipConfig {
+  const configs: Record<PaymentMethod, ChipConfig> = {
+    upi:         { label: 'UPI',           color: '#34d399', bg: 'rgba(52,211,153,0.12)',  border: 'rgba(52,211,153,0.3)' },
+    card:        { label: 'Card',          color: '#818cf8', bg: 'rgba(99,102,241,0.12)',  border: 'rgba(99,102,241,0.3)' },
+    net_banking: { label: 'Net Banking',   color: '#60a5fa', bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.3)' },
+    wallet:      { label: 'Wallet',        color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  border: 'rgba(168,85,247,0.3)' },
+    cod:         { label: 'Cash on Delivery', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)' },
+  };
+  return configs[method];
+}
+
+export function getPayoutMethodLabel(method: PayoutMethod): string {
+  const labels: Record<PayoutMethod, string> = {
+    bank_transfer: 'Bank Transfer (IMPS/NEFT)',
+    upi: 'UPI Transfer',
+    wallet: 'Wallet Transfer',
+  };
+  return labels[method];
+}
+
+export const PAYOUT_TIMELINE_STEPS: { key: PayoutStatus; label: string }[] = [
+  { key: 'requested', label: 'Requested' },
+  { key: 'under_review', label: 'Under Review' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'processing', label: 'Processing' },
+  { key: 'completed', label: 'Completed' },
+];
+
+export function getPayoutStepIndex(status: PayoutStatus): number {
+  const steps: PayoutStatus[] = ['requested', 'under_review', 'approved', 'processing', 'completed'];
+  if (status === 'rejected' || status === 'cancelled' || status === 'failed') return -1;
+  return steps.indexOf(status);
+}
+
+export const PAYMENT_TAB_STATUS_MAP: Record<string, FinancePaymentStatus | ''> = {
+  all: '',
+  pending_verification: 'verification_required',
+  verified: 'verified',
+  declined: 'declined',
+  refunded: 'refunded',
+};

@@ -23,20 +23,34 @@ export default function GlobalSearch({ open, onClose }: GlobalSearchProps) {
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
-      setQuery('');
-      setResults(null);
+      Promise.resolve().then(() => {
+        setQuery('');
+        setResults(null);
+      });
     }
   }, [open]);
 
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (!query || query.length < 2) { setResults(null); return; }
-    setLoading(true);
-    timerRef.current = setTimeout(async () => {
-      const res = await globalSearch(query);
-      setResults(res);
-      setLoading(false);
-    }, 300);
+    if (!query || query.length < 2) {
+      Promise.resolve().then(() => {
+        setResults(null);
+        setLoading(false);
+      });
+      return;
+    }
+    Promise.resolve()
+      .then(() => {
+        setLoading(true);
+        return new Promise<GlobalSearchResults>((resolve, reject) => {
+          timerRef.current = setTimeout(() => {
+            globalSearch(query).then(resolve, reject);
+          }, 300);
+        });
+      })
+      .then((res) => setResults(res))
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
   }, [query]);
 
   useEffect(() => {
@@ -104,7 +118,7 @@ export default function GlobalSearch({ open, onClose }: GlobalSearchProps) {
                   {results!.users.map((user) => (
                     <button
                       key={user.id}
-                      onClick={() => navigate(`/admin/users/${user.id}`)}
+                      onClick={() => navigate(`/admin/users?open=${user.id}`)}
                       className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg hover:bg-[#2a2a35] text-left transition-colors"
                     >
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
@@ -132,7 +146,7 @@ export default function GlobalSearch({ open, onClose }: GlobalSearchProps) {
                     return (
                       <button
                         key={shop.id}
-                        onClick={() => navigate(`/admin/shopkeepers/${shop.id}`)}
+                        onClick={() => navigate(`/admin/shopkeepers?open=${shop.id}`)}
                         className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg hover:bg-[#2a2a35] text-left transition-colors"
                       >
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
@@ -159,7 +173,7 @@ export default function GlobalSearch({ open, onClose }: GlobalSearchProps) {
                   {results!.orders.map((order) => (
                     <button
                       key={order.id}
-                      onClick={() => navigate(`/admin/orders/${order.id}`)}
+                      onClick={() => navigate(`/admin/orders?open=${order.id}`)}
                       className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg hover:bg-[#2a2a35] text-left transition-colors"
                     >
                       <div className="w-8 h-8 rounded-lg bg-[#2a2a35] flex items-center justify-center flex-shrink-0">

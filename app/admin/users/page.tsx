@@ -1,14 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import {
-  Users, Search, ArrowUpDown, CheckCircle2, XCircle, Clock, MapPin, Phone, Mail,
-  Eye, ShoppingBag, DollarSign, X, ShieldAlert, UserCheck
+  Users, Search, ArrowUpDown, MapPin,
+  Eye, DollarSign, X, ShieldAlert, UserCheck, AlertCircle, Mail, Phone
 } from 'lucide-react';
 import { getUsers, getUserOrders } from '@/lib/api';
 import { User, UserStatus } from '@/types/user';
 import { Order } from '@/types/order';
 import { formatCurrency, formatDate, getUserStatusConfig, getOrderStatusConfig } from '@/lib/utils';
+import ConfirmModal from '@/components/admin/finance/ConfirmModal';
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
@@ -16,6 +17,7 @@ export default function UsersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -28,37 +30,67 @@ export default function UsersPage() {
   const [userOrders, setUserOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const openIdRef = useRef<string | null>(null);
 
-  const fetchUsers = async () => {
-    setLoading(true);
-    try {
-      const res = await getUsers({
-        search,
-        status: statusFilter,
-        sortBy,
-        sortDir,
-        page,
-        pageSize: 10,
-      });
-      setUsers(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
-    } catch (err) {
-      console.error('Failed to fetch users:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
+  const fetchUsers = useCallback(() => {
+    Promise.resolve()
+      .then(() => {
+        setLoading(true);
+        setLoadError(false);
+        return getUsers({
+          search,
+          status: statusFilter,
+          sortBy,
+          sortDir,
+          page,
+          pageSize: 10,
+        });
+      })
+      .then((res) => {
+        setUsers(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+        const targetId = openIdRef.current;
+        if (targetId) {
+          const found = res.data.find((u) => u.id === targetId);
+          if (found) {
+            setSelectedUser(found);
+            openIdRef.current = null;
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch users:', err);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
   }, [search, statusFilter, sortBy, sortDir, page]);
 
   useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  // Deep links such as /admin/users?search=<query> or /admin/users?open=<id> (used by GlobalSearch).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get('open');
+    openIdRef.current = openId;
+    Promise.resolve().then(() => {
+      const q = params.get('search');
+      if (openId) setSearch(openId);
+      else if (q) setSearch(q);
+    });
+  }, []);
+
+  useEffect(() => {
     if (selectedUser) {
-      setLoadingOrders(true);
-      getUserOrders(selectedUser.id)
-        .then(setUserOrders)
+      Promise.resolve()
+        .then(() => {
+          setLoadingOrders(true);
+          return getUserOrders(selectedUser.id);
+        })
+        .then((orders) => setUserOrders(orders))
         .catch(console.error)
         .finally(() => setLoadingOrders(false));
     }
@@ -173,9 +205,30 @@ export default function UsersPage() {
       {/* Users Table */}
       <div className="bg-[#12121a] border border-[#2a2a38] rounded-2xl shadow-xl overflow-hidden">
         {loading ? (
-          <div className="p-12 text-center text-slate-400">Loading User accounts...</div>
+          <div className="p-12 text-center text-slate-400 flex items-center justify-center gap-3">
+            <div className="w-6 h-6 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+            Loading users...
+          </div>
+        ) : loadError ? (
+          <div className="p-12 text-center">
+            <AlertCircle size={34} className="mx-auto mb-3 text-rose-400 opacity-70" />
+            <div className="text-slate-300 font-semibold">Unable to load data</div>
+            <div className="text-xs text-slate-500 mt-1">Please try again.</div>
+            <button
+              onClick={() => {
+                setLoadError(false);
+                fetchUsers();
+              }}
+              className="mt-4 px-4 py-2 rounded-xl bg-[#181824] border border-[#2c2c3e] text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         ) : users.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">No users found matching query.</div>
+          <div className="p-12 text-center">
+            <div className="text-slate-300 font-semibold">No users found.</div>
+            <div className="text-xs text-slate-500 mt-1">Try changing your search or filters.</div>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-300">
@@ -324,8 +377,53 @@ export default function UsersPage() {
                 </div>
               )}
 
+              {/* Account Information (grouped existing fields) */}
+              <div className="mt-5 p-4 rounded-xl bg-[#181824] border border-[#28283a]">
+                <div className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">Account Information</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">User ID</span>
+                    <span className="text-white font-mono">{selectedUser.id}</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">Email</span>
+                    <span className="text-white break-all flex items-center gap-1.5">
+                      <Mail size={12} className="text-indigo-400 flex-shrink-0" />
+                      {selectedUser.email}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">Phone</span>
+                    <span className="text-white flex items-center gap-1.5">
+                      <Phone size={12} className="text-indigo-400 flex-shrink-0" />
+                      {selectedUser.phone}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">Location</span>
+                    <span className="text-white flex items-center gap-1.5">
+                      <MapPin size={12} className="text-indigo-400 flex-shrink-0" />
+                      {selectedUser.location}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">Status</span>
+                    <span
+                      className="px-2 py-0.5 rounded text-[10px] font-semibold border"
+                      style={getUserStatusConfig(selectedUser.status)}
+                    >
+                      {getUserStatusConfig(selectedUser.status).label}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 w-24 flex-shrink-0">Registered</span>
+                    <span className="text-white">{formatDate(selectedUser.createdAt)}</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Status Controls */}
-              <div className="mt-5 p-4 rounded-xl bg-[#181824] border border-[#28283a] space-y-3">
+              <div className="mt-4 p-4 rounded-xl bg-[#181824] border border-[#28283a] space-y-3">
                 <div className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Account Access Control</div>
                 <div className="flex flex-wrap gap-2">
                   {selectedUser.status !== 'active' && (
@@ -338,7 +436,7 @@ export default function UsersPage() {
                   )}
                   {selectedUser.status !== 'blocked' && (
                     <button
-                      onClick={() => handleStatusChange('blocked')}
+                      onClick={() => setConfirmBlock(true)}
                       className="px-3 py-1.5 rounded-lg bg-rose-600/30 border border-rose-500/40 text-rose-300 hover:bg-rose-600/50 text-xs font-medium transition-colors"
                     >
                       Block User Account
@@ -351,7 +449,7 @@ export default function UsersPage() {
               <div className="mt-6 space-y-6">
                 <div>
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Customer Spend & Order Metrics</h4>
-                  <div className="grid grid-cols-2 gap-3 text-center">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
                     <div className="p-3.5 rounded-xl bg-[#181824] border border-[#242436]">
                       <div className="text-xs text-slate-400">Total Lifetime Spend</div>
                       <div className="text-lg font-bold text-emerald-400 mt-1">{formatCurrency(selectedUser.totalSpent)}</div>
@@ -359,6 +457,18 @@ export default function UsersPage() {
                     <div className="p-3.5 rounded-xl bg-[#181824] border border-[#242436]">
                       <div className="text-xs text-slate-400">Total Print Jobs Placed</div>
                       <div className="text-lg font-bold text-white mt-1">{selectedUser.totalOrders}</div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Completed Orders</div>
+                      <div className="text-lg font-bold text-emerald-400 mt-1">{selectedUser.completedOrders}</div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Active Orders</div>
+                      <div className="text-lg font-bold text-amber-400 mt-1">{selectedUser.activeOrders}</div>
+                    </div>
+                    <div className="p-3.5 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Cancelled Orders</div>
+                      <div className="text-lg font-bold text-rose-400 mt-1">{selectedUser.cancelledOrders}</div>
                     </div>
                   </div>
                 </div>
@@ -404,6 +514,20 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {/* Destructive action confirmation (§18) */}
+      <ConfirmModal
+        open={confirmBlock && selectedUser !== null}
+        onClose={() => setConfirmBlock(false)}
+        title="Block this user account?"
+        description={`${selectedUser?.name ?? 'This user'} will no longer be able to place or manage print orders. You can reactivate the account later.`}
+        confirmLabel="Block Account"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmBlock(false);
+          handleStatusChange('blocked');
+        }}
+      />
     </div>
   );
 }

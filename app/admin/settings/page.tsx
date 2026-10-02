@@ -1,14 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Settings, Sliders, DollarSign, ShieldCheck, Bell, Lock, Save, CheckCircle2, Server, HelpCircle
+  Sliders, DollarSign, Lock, Save, CheckCircle2, Server,
+  Loader2, AlertCircle
 } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { getCommissionRate, updateCommissionRate, toFinanceMessage } from '@/lib/finance/api';
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'general' | 'pricing' | 'maintenance' | 'security'>('general');
   const [savedMsg, setSavedMsg] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Form State
   const [generalConfig, setGeneralConfig] = useState({
@@ -37,16 +40,44 @@ export default function SettingsPage() {
   });
 
   const handleSave = () => {
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 3000);
+    const rate = Math.round((Number(pricingConfig.platformCommissionPercent) || 0) * 100) / 100;
+    if (!Number.isFinite(rate) || rate < 0 || rate > 50) {
+      setErrorMsg('Platform commission must be between 0% and 50%.');
+      return;
+    }
+    setSaving(true);
+    setErrorMsg(null);
+    updateCommissionRate(rate)
+      .then((saved) => {
+        setPricingConfig((prev) => ({ ...prev, platformCommissionPercent: saved }));
+        setSavedMsg(true);
+        setTimeout(() => setSavedMsg(false), 3000);
+      })
+      .catch((err) => setErrorMsg(toFinanceMessage(err)))
+      .finally(() => setSaving(false));
   };
+
+  useEffect(() => {
+    getCommissionRate()
+      .then((rate) => {
+        setPricingConfig((prev) => ({ ...prev, platformCommissionPercent: rate }));
+      })
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="space-y-6 pb-8">
       {/* Save Toast Banner */}
       {savedMsg && (
         <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-semibold flex items-center gap-2 animate-fadeIn">
-          <CheckCircle2 size={18} /> Platform Settings successfully updated & persisted.
+          <CheckCircle2 size={18} /> Platform Settings successfully updated and persisted.
+        </div>
+      )}
+
+      {/* Save Error Toast */}
+      {errorMsg && (
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-sm font-semibold flex items-center gap-2 animate-fadeIn">
+          <AlertCircle size={18} /> {errorMsg}
         </div>
       )}
 
@@ -164,13 +195,23 @@ export default function SettingsPage() {
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Platform Commission Fee (%)
                 </label>
-                <p className="text-xs text-slate-500 mb-2">Percentage retained by Xerox Mate from each print order transaction.</p>
+                <p className="text-xs text-slate-500 mb-2">Percentage retained by Xerox Mate from each payout request. Applied live to every payout approval (0% to 50%).</p>
                 <input
                   type="number"
+                  min={0}
+                  max={50}
+                  step={0.5}
                   value={pricingConfig.platformCommissionPercent}
                   onChange={(e) => setPricingConfig({ ...pricingConfig, platformCommissionPercent: Number(e.target.value) })}
                   className="w-full sm:w-48 px-3 py-2 bg-[#12121a] border border-[#333348] rounded-xl text-sm text-white font-bold"
                 />
+                <p className="text-[11px] text-slate-500 mt-2">
+                  Approved payouts currently deduct{' '}
+                  <span className="text-indigo-300 font-semibold">
+                    {pricingConfig.platformCommissionPercent}%
+                  </span>{' '}
+                  as platform commission.
+                </p>
               </div>
 
               <div>
@@ -252,7 +293,7 @@ export default function SettingsPage() {
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
                   Unaccepted Order Auto-Cancel Timeout (Minutes)
                 </label>
-                <p className="text-xs text-slate-500 mb-2">Orders automatically cancel if shopkeeper doesn't accept within this window.</p>
+                <p className="text-xs text-slate-500 mb-2">Orders automatically cancel if the shopkeeper does not accept within this window.</p>
                 <input
                   type="number"
                   value={systemConfig.autoCancelTimeoutMinutes}
@@ -336,9 +377,10 @@ export default function SettingsPage() {
         <div className="pt-6 border-t border-[#2a2a38] flex items-center justify-end">
           <button
             onClick={handleSave}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-lg shadow-indigo-600/30"
+            disabled={saving}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all shadow-lg shadow-indigo-600/30 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save size={16} /> Save Settings
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save Settings
           </button>
         </div>
       </div>

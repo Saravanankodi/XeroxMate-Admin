@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
-  Users, Store, ShoppingBag, IndianRupee, ArrowUpRight, ArrowDownRight,
-  Clock, CheckCircle2, AlertCircle, XCircle, TrendingUp, ChevronRight, Activity, Zap
+  Users, Store, ShoppingBag, IndianRupee, ArrowUpRight,
+  Clock, CheckCircle2, XCircle, TrendingUp, ChevronRight, Activity, Zap,
+  ShieldCheck, Wallet, Award, CreditCard
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid
@@ -16,8 +17,11 @@ import {
   getRevenueData,
   getTopShopkeepers
 } from '@/lib/api';
+import { getFinancialStats, getPaymentVolume, getPayoutStatusDistribution } from '@/lib/finance/api';
 import { DashboardStats, PlatformHealth, ActivityItem, RevenueDataPoint, TopShopkeeper } from '@/types/analytics';
+import type { FinancialStats, PaymentVolumePoint, FinanceStatusShare } from '@/types/payment';
 import { formatCurrency, formatRelativeTime } from '@/lib/utils';
+import FinanceKpiCard from '@/components/admin/finance/FinanceKpiCard';
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -26,6 +30,20 @@ export default function DashboardPage() {
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
   const [topShops, setTopShops] = useState<TopShopkeeper[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [financeStats, setFinanceStats] = useState<FinancialStats | null>(null);
+  const [paymentVolume, setPaymentVolume] = useState<PaymentVolumePoint[]>([]);
+  const [payoutShares, setPayoutShares] = useState<FinanceStatusShare[]>([]);
+
+  useEffect(() => {
+    Promise.all([getFinancialStats(), getPaymentVolume('30d'), getPayoutStatusDistribution()])
+      .then(([fs, vol, shares]) => {
+        setFinanceStats(fs);
+        setPaymentVolume(vol);
+        setPayoutShares(shares);
+      })
+      .catch((err) => console.error('Failed to load finance dashboard data:', err));
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -165,6 +183,60 @@ export default function DashboardPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* Finance KPI row */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-white uppercase tracking-wider flex items-center gap-2">
+            <CreditCard size={16} className="text-indigo-400" /> Payments & Payouts
+          </h3>
+          <div className="flex items-center gap-3">
+            <Link href="/admin/payments" className="text-xs font-medium text-indigo-400 hover:text-indigo-300">
+              Payment Management
+            </Link>
+            <Link href="/admin/payouts" className="text-xs font-medium text-indigo-400 hover:text-indigo-300">
+              Payout Requests
+            </Link>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          <FinanceKpiCard
+            title="Verified Payments"
+            value={financeStats ? formatCurrency(financeStats.verifiedAmount) : '—'}
+            subtext={`${financeStats?.verifiedCount ?? 0} verified • eligible for payouts`}
+            icon={ShieldCheck}
+            tone="emerald"
+          />
+          <FinanceKpiCard
+            title="Pending Verification"
+            value={financeStats ? formatCurrency(financeStats.pendingVerificationAmount) : '—'}
+            subtext={`${financeStats?.pendingVerificationCount ?? 0} awaiting admin action`}
+            icon={Clock}
+            tone="amber"
+          />
+          <FinanceKpiCard
+            title="Awaiting Payout"
+            value={financeStats ? formatCurrency(financeStats.pendingPayoutAmount) : '—'}
+            subtext={`${financeStats?.pendingPayoutCount ?? 0} requested or in review`}
+            icon={Wallet}
+            tone="purple"
+          />
+          <FinanceKpiCard
+            title="Paid Out"
+            value={financeStats ? formatCurrency(financeStats.completedPayoutAmount) : '—'}
+            subtext={`${financeStats?.completedPayoutCount ?? 0} completed payouts`}
+            icon={CheckCircle2}
+            tone="blue"
+          />
+          <FinanceKpiCard
+            title="Platform Commission"
+            value={financeStats ? formatCurrency(financeStats.totalCommission) : '—'}
+            subtext="Collected across approved payouts"
+            icon={Award}
+            tone="cyan"
+          />
+        </div>
       </div>
 
       {/* Platform Live Operational Health Bar */}
@@ -312,6 +384,120 @@ export default function DashboardPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Finance analytics charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Payment volume area chart */}
+        <div className="lg:col-span-2 bg-[#12121a] border border-[#2a2a38] rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <TrendingUp size={18} className="text-emerald-400" />
+                Customer Payment Volume (Last 30 Days)
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Daily gross amount collected from customer payments
+              </p>
+            </div>
+            <Link
+              href="/admin/payments"
+              className="text-xs font-medium text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+            >
+              Payments <ChevronRight size={14} />
+            </Link>
+          </div>
+
+          <div className="h-64 w-full flex-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={paymentVolume} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorPaymentVolume" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#232333" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke="#6b7280"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(val) => String(val).split('-').slice(1).join('/')}
+                />
+                <YAxis
+                  stroke="#6b7280"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(val) => `₹${(Number(val) / 1000).toFixed(0)}k`}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#181824', borderColor: '#333348', borderRadius: '12px', color: '#fff' }}
+                  formatter={(val: unknown) => [formatCurrency(Number(val)), 'Payments']}
+                  labelFormatter={(lbl) => `Date: ${lbl}`}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="amount"
+                  stroke="#34d399"
+                  strokeWidth={2.5}
+                  fillOpacity={1}
+                  fill="url(#colorPaymentVolume)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Payout status distribution */}
+        <div className="bg-[#12121a] border border-[#2a2a38] rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Wallet size={18} className="text-indigo-400" />
+              Payout Status
+            </h3>
+            <Link href="/admin/payouts" className="text-xs font-medium text-indigo-400 hover:text-indigo-300">
+              View All
+            </Link>
+          </div>
+
+          <div className="h-64 w-full flex-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={payoutShares}
+                layout="vertical"
+                margin={{ top: 0, right: 12, left: 0, bottom: 0 }}
+                barCategoryGap={8}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#232333" horizontal={false} />
+                <XAxis type="number" stroke="#6b7280" fontSize={11} tickLine={false} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  stroke="#6b7280"
+                  fontSize={11}
+                  tickLine={false}
+                  width={92}
+                />
+                <Tooltip
+                  cursor={{ fill: 'rgba(99,102,241,0.06)' }}
+                  contentStyle={{ backgroundColor: '#181824', borderColor: '#333348', borderRadius: '12px', color: '#fff' }}
+                  formatter={(val, _name, item) => {
+                    const share = item?.payload as FinanceStatusShare | undefined;
+                    return [`${val} requests`, share ? formatCurrency(share.amount) : 'Total'];
+                  }}
+                />
+                <Bar dataKey="count" fill="#818cf8" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-[#1f1f2e] text-[11px] text-slate-500">
+            {payoutShares.length > 0
+              ? `${payoutShares.reduce((acc, s) => acc + s.count, 0)} payout requests tracked across all statuses`
+              : 'No payout requests recorded yet'}
           </div>
         </div>
       </div>

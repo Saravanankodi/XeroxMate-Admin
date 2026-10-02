@@ -22,6 +22,14 @@ const pageTitles: Record<string, { title: string; description: string }> = {
     title: 'Order Monitoring',
     description: 'View, filter, and update print job progress and payment statuses.',
   },
+  '/admin/payments': {
+    title: 'Payment Management',
+    description: 'Verify customer payments, review declines and refunds, and audit every financial action.',
+  },
+  '/admin/payouts': {
+    title: 'Shopkeeper Payouts',
+    description: 'Review payout requests, manage commissions, and settle shopkeeper balances.',
+  },
   '/admin/analytics': {
     title: 'Analytics & Insights',
     description: 'Deep dive into revenue trends, order volume distribution, and growth performance.',

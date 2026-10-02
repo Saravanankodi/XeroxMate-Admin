@@ -2,27 +2,25 @@
 
 import { useState, useEffect } from 'react';
 import {
-  BarChart3, TrendingUp, Users, Store, ShoppingBag, IndianRupee, Calendar, Filter, Award, PieChart
+  BarChart3, TrendingUp, Users, Award, PieChart
 } from 'lucide-react';
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar, LineChart, Line, CartesianGrid, Legend
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, LineChart, Line, CartesianGrid, Legend
 } from 'recharts';
 import {
   getGrowthData,
-  getOrderVolumeData,
   getRevenueData,
   getOrderStatusDistribution,
   getTopShopkeepers
 } from '@/lib/api';
 import {
-  TimeRange, GrowthDataPoint, OrderVolumeDataPoint, RevenueDataPoint, OrderStatusDistribution, TopShopkeeper
+  TimeRange, GrowthDataPoint, RevenueDataPoint, OrderStatusDistribution, TopShopkeeper
 } from '@/types/analytics';
 import { formatCurrency } from '@/lib/utils';
 
 export default function AnalyticsPage() {
   const [range, setRange] = useState<TimeRange>('30d');
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
-  const [volumeData, setVolumeData] = useState<OrderVolumeDataPoint[]>([]);
   const [growthData, setGrowthData] = useState<GrowthDataPoint[]>([]);
   const [statusDist, setStatusDist] = useState<OrderStatusDistribution[]>([]);
   const [topShops, setTopShops] = useState<TopShopkeeper[]>([]);
@@ -32,15 +30,13 @@ export default function AnalyticsPage() {
     async function loadAnalytics() {
       setLoading(true);
       try {
-        const [revRes, volRes, growthRes, distRes, topRes] = await Promise.all([
+        const [revRes, growthRes, distRes, topRes] = await Promise.all([
           getRevenueData(range),
-          getOrderVolumeData(range),
           getGrowthData(range),
           getOrderStatusDistribution(),
           getTopShopkeepers(),
         ]);
         setRevenueData(revRes);
-        setVolumeData(volRes);
         setGrowthData(growthRes);
         setStatusDist(distRes);
         setTopShops(topRes);

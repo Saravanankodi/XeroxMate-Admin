@@ -50,7 +50,6 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   const activeOrders = mockOrders.filter((o) =>
     ['new', 'accepted', 'printing', 'finishing', 'ready_for_pickup', 'out_for_delivery'].includes(o.status)
   );
-  const completedOrders = mockOrders.filter((o) => o.status === 'delivered');
   const newShopkeepersThisWeek = mockShopkeepers.filter((s) => new Date(s.createdAt) >= weekAgo);
   const newUsersToday = mockUsers.filter((u) => new Date(u.createdAt).toDateString() === today);
 
@@ -266,6 +265,7 @@ export async function getOrders(filters: OrderFilters = {}): Promise<PaginatedRe
         o.id.toLowerCase().includes(q) ||
         o.userName.toLowerCase().includes(q) ||
         o.shopkeeperName.toLowerCase().includes(q) ||
+        o.shopkeeperId.toLowerCase().includes(q) ||
         o.userPhone.includes(q) ||
         o.userEmail.toLowerCase().includes(q)
     );
@@ -281,8 +281,13 @@ export async function getOrders(filters: OrderFilters = {}): Promise<PaginatedRe
     let bv: string | number = '';
     if (sortBy === 'totalAmount') { av = a.totalAmount; bv = b.totalAmount; }
     else if (sortBy === 'createdAt') { av = a.createdAt; bv = b.createdAt; }
-    else { av = String((a as Record<string, unknown>)[sortBy] ?? ''); bv = String((b as Record<string, unknown>)[sortBy] ?? ''); }
-    const cmp = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv));
+    else {
+      const aRec = a as unknown as Record<string, unknown>;
+      const bRec = b as unknown as Record<string, unknown>;
+      av = String(aRec[sortBy] ?? '');
+      bv = String(bRec[sortBy] ?? '');
+    }
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return sortDir === 'asc' ? cmp : -cmp;
   });
 

@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import {
-  ShoppingBag, Search, Filter, ArrowUpDown, CheckCircle2, Clock, Truck, Store,
-  User, DollarSign, FileText, Printer, ChevronRight, Eye, RefreshCw, X, AlertCircle
+  ShoppingBag, Search, ArrowUpDown, CheckCircle2, Store,
+  User, DollarSign, FileText, Printer, Eye, X, AlertCircle, Truck, CreditCard
 } from 'lucide-react';
 import { getOrders } from '@/lib/api';
+import { syncOrderPayment, toFinanceMessage, getPayments } from '@/lib/finance/api';
 import { Order, OrderStatus, PaymentStatus, DeliveryType } from '@/types/order';
+import type { Payment } from '@/types/payment';
 import {
   formatCurrency,
   formatDate,
@@ -14,9 +16,13 @@ import {
   getOrderStatusConfig,
   getPaymentStatusConfig,
   getDeliveryTypeConfig,
+  getFinancePaymentStatusConfig,
+  getPaymentMethodConfig,
+  getPaymentVerificationConfig,
   ORDER_TIMELINE_STEPS,
   getOrderStatusStep
 } from '@/lib/utils';
+import ConfirmModal from '@/components/admin/finance/ConfirmModal';
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -24,6 +30,7 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -36,33 +43,62 @@ export default function OrdersPage() {
   // Selected Order Drawer Modal
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [statusActionMsg, setStatusActionMsg] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [linkedPayment, setLinkedPayment] = useState<Payment | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const openIdRef = useRef<string | null>(null);
 
-  const fetchOrders = async () => {
-    setLoading(true);
-    try {
-      const res = await getOrders({
-        search,
-        status: statusFilter as OrderStatus | '',
-        paymentStatus: paymentFilter as PaymentStatus | '',
-        deliveryType: deliveryFilter as DeliveryType | '',
-        sortBy,
-        sortDir,
-        page,
-        pageSize: 10,
-      });
-      setOrders(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
-    } catch (err) {
-      console.error('Failed to fetch orders:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchOrders = useCallback(() => {
+    Promise.resolve()
+      .then(() => {
+        setLoading(true);
+        setLoadError(false);
+        return getOrders({
+          search,
+          status: statusFilter as OrderStatus | '',
+          paymentStatus: paymentFilter as PaymentStatus | '',
+          deliveryType: deliveryFilter as DeliveryType | '',
+          sortBy,
+          sortDir,
+          page,
+          pageSize: 10,
+        });
+      })
+      .then((res) => {
+        setOrders(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+        const targetId = openIdRef.current;
+        if (targetId) {
+          const found = res.data.find((o) => o.id === targetId);
+          if (found) {
+            setSelectedOrder(found);
+            openIdRef.current = null;
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch orders:', err);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
+  }, [search, statusFilter, paymentFilter, deliveryFilter, sortBy, sortDir, page]);
 
   useEffect(() => {
     fetchOrders();
-  }, [search, statusFilter, paymentFilter, deliveryFilter, sortBy, sortDir, page]);
+  }, [fetchOrders]);
+
+  // Deep links such as /admin/orders?search=OMX-1049 or /admin/orders?open=OMX-1049 (used by GlobalSearch).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get('open');
+    openIdRef.current = openId;
+    Promise.resolve().then(() => {
+      const q = params.get('search');
+      if (openId) setSearch(openId);
+      else if (q) setSearch(q);
+    });
+  }, []);
 
   const handleUpdateOrderStatus = (newStatus: OrderStatus) => {
     if (!selectedOrder) return;
@@ -82,9 +118,42 @@ export default function OrdersPage() {
     const updated = { ...selectedOrder, paymentStatus: newPayStatus };
     setSelectedOrder(updated);
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
-    setStatusActionMsg(`Payment status updated to ${newPayStatus.toUpperCase()}`);
-    setTimeout(() => setStatusActionMsg(null), 3000);
+    syncOrderPayment(updated)
+      .then(() => setStatusActionMsg(`Payment status updated to ${newPayStatus.toUpperCase()}`))
+      .catch((err) => setStatusActionMsg(toFinanceMessage(err)))
+      .finally(() => {
+        setTimeout(() => setStatusActionMsg(null), 3000);
+      });
   };
+
+  // Related data connection: load the finance payment record recorded for this order (§10).
+  const selectedOrderId = selectedOrder?.id;
+  useEffect(() => {
+    let active = true;
+    Promise.resolve()
+      .then(() => {
+        setPaymentLoading(true);
+        if (!selectedOrderId) {
+          setLinkedPayment(null);
+          setPaymentLoading(false);
+          return null;
+        }
+        return getPayments({ search: selectedOrderId, pageSize: 5 });
+      })
+      .then((res) => {
+        if (!active || !res) return;
+        setLinkedPayment(res.data.find((p) => p.orderId === selectedOrderId) ?? null);
+        setPaymentLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setLinkedPayment(null);
+        setPaymentLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedOrderId]);
 
   return (
     <div className="space-y-6 pb-8">
@@ -144,7 +213,7 @@ export default function OrdersPage() {
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by order ID, customer name, shopkeeper, or phone..."
+              placeholder="Search by order ID, shop ID, customer name, shopkeeper, or phone..."
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="w-full pl-10 pr-4 py-2 bg-[#181824] border border-[#2c2c3e] rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
@@ -215,9 +284,30 @@ export default function OrdersPage() {
       {/* Orders Table */}
       <div className="bg-[#12121a] border border-[#2a2a38] rounded-2xl shadow-xl overflow-hidden">
         {loading ? (
-          <div className="p-12 text-center text-slate-400">Loading Orders list...</div>
+          <div className="p-12 text-center text-slate-400 flex items-center justify-center gap-3">
+            <div className="w-6 h-6 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+            Loading orders...
+          </div>
+        ) : loadError ? (
+          <div className="p-12 text-center">
+            <AlertCircle size={34} className="mx-auto mb-3 text-rose-400 opacity-70" />
+            <div className="text-slate-300 font-semibold">Unable to load data</div>
+            <div className="text-xs text-slate-500 mt-1">Please try again.</div>
+            <button
+              onClick={() => {
+                setLoadError(false);
+                fetchOrders();
+              }}
+              className="mt-4 px-4 py-2 rounded-xl bg-[#181824] border border-[#2c2c3e] text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         ) : orders.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">No print orders match the selected filters.</div>
+          <div className="p-12 text-center">
+            <div className="text-slate-300 font-semibold">No print orders found.</div>
+            <div className="text-xs text-slate-500 mt-1">Try changing your search or filters.</div>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-300">
@@ -389,6 +479,7 @@ export default function OrdersPage() {
                     const currentIdx = getOrderStatusStep(selectedOrder.status);
                     const isPassed = currentIdx >= idx;
                     const isCurrent = currentIdx === idx;
+                    const stepAt = selectedOrder.timestamps[step.key];
 
                     return (
                       <button
@@ -406,10 +497,22 @@ export default function OrdersPage() {
                           {isPassed ? '✓' : idx + 1}
                         </div>
                         <span className="text-[10px] leading-tight truncate w-full">{step.label}</span>
+                        {stepAt && (
+                          <span className={`text-[8px] mt-0.5 leading-tight ${
+                            isCurrent ? 'text-indigo-300' : isPassed ? 'text-emerald-500' : 'text-slate-500'
+                          }`}>
+                            {formatDate(stepAt, true)}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
                 </div>
+                {selectedOrder.status === 'cancelled' && selectedOrder.timestamps.cancelled && (
+                  <div className="mt-2 text-[11px] text-rose-400 font-semibold">
+                    Cancelled on {formatDate(selectedOrder.timestamps.cancelled, true)}
+                  </div>
+                )}
               </div>
 
               {/* Admin Override Action Bar */}
@@ -428,7 +531,7 @@ export default function OrdersPage() {
                   </select>
 
                   <button
-                    onClick={() => handleUpdateOrderStatus('cancelled')}
+                    onClick={() => setConfirmCancel(true)}
                     className="px-2.5 py-1 bg-rose-600/20 border border-rose-500/40 text-rose-300 hover:bg-rose-600/40 rounded-lg transition-colors font-semibold"
                   >
                     Cancel Order
@@ -457,6 +560,39 @@ export default function OrdersPage() {
                   <div className="text-xs text-slate-400">{selectedOrder.shopkeeperPhone}</div>
                   <div className="text-xs text-slate-300 mt-2 bg-[#202030] p-2 rounded-lg">{selectedOrder.shopkeeperLocation}</div>
                 </div>
+              </div>
+
+              {/* Delivery / Pickup Information */}
+              <div className="mt-4 p-4 rounded-xl bg-[#181824] border border-[#242436]">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Truck size={14} className="text-indigo-400" />
+                  {selectedOrder.deliveryInfo.type === 'delivery' ? 'Delivery Information' : 'Pickup Information'}
+                </div>
+                {selectedOrder.deliveryInfo.type === 'delivery' ? (
+                  <>
+                    <div className="text-sm font-semibold text-white">Home Delivery</div>
+                    <div className="text-xs text-slate-300 mt-1 bg-[#202030] p-2 rounded-lg">
+                      {selectedOrder.deliveryInfo.address}
+                    </div>
+                    {selectedOrder.deliveryInfo.estimatedTime && (
+                      <div className="text-xs text-slate-400 mt-1.5">
+                        Estimated delivery: {selectedOrder.deliveryInfo.estimatedTime}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm font-semibold text-white">
+                      {selectedOrder.deliveryInfo.shopName}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">{selectedOrder.deliveryInfo.shopAddress}</div>
+                    {selectedOrder.deliveryInfo.shopTiming && (
+                      <div className="text-xs text-slate-400 mt-1.5">
+                        Shop timing: {selectedOrder.deliveryInfo.shopTiming}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
               {/* Print Document Specifications */}
@@ -516,14 +652,127 @@ export default function OrdersPage() {
                   <span className="text-emerald-400">{formatCurrency(selectedOrder.totalAmount)}</span>
                 </div>
               </div>
+
+              {/* Payment Information — order settlement fields + linked finance payment record */}
+              <div className="mt-4 p-4 rounded-xl bg-[#161622] border border-[#262638] space-y-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                    <CreditCard size={14} className="text-indigo-400" /> Payment Information
+                  </h4>
+                  <a
+                    href={`/admin/payments?search=${selectedOrder.id}`}
+                    className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+                  >
+                    <Eye size={12} /> View in Payments
+                  </a>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <div className="text-slate-500">Total Amount</div>
+                    <div className="text-white font-bold mt-0.5">{formatCurrency(selectedOrder.totalAmount)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Amount Paid</div>
+                    <div className="text-emerald-400 font-bold mt-0.5">{formatCurrency(selectedOrder.amountPaid)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Balance Due</div>
+                    <div className={`font-bold mt-0.5 ${selectedOrder.balanceDue > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {formatCurrency(selectedOrder.balanceDue)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Payment Status</div>
+                    <span
+                      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border mt-1"
+                      style={getPaymentStatusConfig(selectedOrder.paymentStatus)}
+                    >
+                      {getPaymentStatusConfig(selectedOrder.paymentStatus).label}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="border-t border-[#2a2a38] pt-3">
+                  {paymentLoading ? (
+                    <div className="text-slate-500 flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                      Loading linked payment record...
+                    </div>
+                  ) : linkedPayment ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div>
+                        <div className="text-slate-500">Method</div>
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border mt-1"
+                          style={getPaymentMethodConfig(linkedPayment.paymentMethod)}
+                        >
+                          {getPaymentMethodConfig(linkedPayment.paymentMethod).label}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Transaction ID</div>
+                        <div className="text-white font-mono mt-0.5">{linkedPayment.transactionId}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Gateway Reference</div>
+                        <div className="text-white font-mono mt-0.5">{linkedPayment.gatewayReference}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Invoice No.</div>
+                        <div className="text-white font-mono mt-0.5">{linkedPayment.invoiceNumber}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Payment Record Status</div>
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border mt-1"
+                          style={getFinancePaymentStatusConfig(linkedPayment.paymentStatus)}
+                        >
+                          {getFinancePaymentStatusConfig(linkedPayment.paymentStatus).label}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Verification</div>
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border mt-1"
+                          style={getPaymentVerificationConfig(linkedPayment.verificationStatus)}
+                        >
+                          {getPaymentVerificationConfig(linkedPayment.verificationStatus).label}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Payout State</div>
+                        <div className="text-white font-medium capitalize mt-0.5">
+                          {linkedPayment.payoutState.replace(/_/g, ' ')}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-slate-500">No linked payment record yet.</div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="pt-4 border-t border-[#2a2a38] text-xs text-slate-500 text-center">
-              Order ID: {selectedOrder.id} • Managed via Xerox Mate Admin System
+              Order ID: {selectedOrder.id} • Last updated {formatDate(selectedOrder.updatedAt, true)} • Managed via Xerox Mate Admin System
             </div>
           </div>
         </div>
       )}
+
+      {/* Destructive action confirmation (§18) */}
+      <ConfirmModal
+        open={confirmCancel && selectedOrder !== null}
+        onClose={() => setConfirmCancel(false)}
+        title="Cancel this order?"
+        description={`${selectedOrder?.id ?? 'This order'} will be marked as Cancelled. The print job stops here and the status change is shown to the shopkeeper.`}
+        confirmLabel="Cancel Order"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmCancel(false);
+          handleUpdateOrderStatus('cancelled');
+        }}
+      />
     </div>
   );
 }

@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useTransition } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import {
-  Store, Search, Filter, ArrowUpDown, CheckCircle2, AlertCircle, XCircle, Clock,
-  MapPin, Phone, Mail, ChevronRight, Eye, ShieldCheck, ShieldAlert, Star, DollarSign, X
+  Store, Search, ArrowUpDown, CheckCircle2, Clock,
+  MapPin, Phone, Mail, Eye, ShieldCheck, Star, DollarSign, X, AlertCircle
 } from 'lucide-react';
 import { getShopkeepers, getShopkeeperOrders } from '@/lib/api';
 import { Shopkeeper, ShopkeeperStatus } from '@/types/shopkeeper';
@@ -15,6 +15,7 @@ import {
   getVerificationStatusConfig,
   getOrderStatusConfig
 } from '@/lib/utils';
+import ConfirmModal from '@/components/admin/finance/ConfirmModal';
 
 export default function ShopkeepersPage() {
   const [shopkeepers, setShopkeepers] = useState<Shopkeeper[]>([]);
@@ -22,6 +23,7 @@ export default function ShopkeepersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -34,37 +36,67 @@ export default function ShopkeepersPage() {
   const [shopOrders, setShopOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [actionStatusMsg, setActionStatusMsg] = useState<string | null>(null);
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
+  const openIdRef = useRef<string | null>(null);
 
-  const fetchShopkeepers = async () => {
-    setLoading(true);
-    try {
-      const res = await getShopkeepers({
-        search,
-        status: statusFilter,
-        sortBy,
-        sortDir,
-        page,
-        pageSize: 10,
-      });
-      setShopkeepers(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
-    } catch (err) {
-      console.error('Failed to fetch shopkeepers:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchShopkeepers = useCallback(() => {
+    Promise.resolve()
+      .then(() => {
+        setLoading(true);
+        setLoadError(false);
+        return getShopkeepers({
+          search,
+          status: statusFilter,
+          sortBy,
+          sortDir,
+          page,
+          pageSize: 10,
+        });
+      })
+      .then((res) => {
+        setShopkeepers(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+        const targetId = openIdRef.current;
+        if (targetId) {
+          const found = res.data.find((s) => s.id === targetId);
+          if (found) {
+            setSelectedShopkeeper(found);
+            openIdRef.current = null;
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch shopkeepers:', err);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
+  }, [search, statusFilter, sortBy, sortDir, page]);
 
   useEffect(() => {
     fetchShopkeepers();
-  }, [search, statusFilter, sortBy, sortDir, page]);
+  }, [fetchShopkeepers]);
+
+  // Deep links such as /admin/shopkeepers?search=<query> or /admin/shopkeepers?open=<id> (used by GlobalSearch).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get('open');
+    openIdRef.current = openId;
+    Promise.resolve().then(() => {
+      const q = params.get('search');
+      if (openId) setSearch(openId);
+      else if (q) setSearch(q);
+    });
+  }, []);
 
   // When drawer opens, load shopkeeper's orders
   useEffect(() => {
     if (selectedShopkeeper) {
-      setLoadingOrders(true);
-      getShopkeeperOrders(selectedShopkeeper.id)
+      Promise.resolve()
+        .then(() => {
+          setLoadingOrders(true);
+          return getShopkeeperOrders(selectedShopkeeper.id);
+        })
         .then((orders) => setShopOrders(orders))
         .catch(console.error)
         .finally(() => setLoadingOrders(false));
@@ -82,8 +114,8 @@ export default function ShopkeepersPage() {
 
   const handleVerificationUpdate = (verified: boolean) => {
     if (!selectedShopkeeper) return;
-    const newVer = verified ? 'verified' : 'unverified';
-    const updated = { ...selectedShopkeeper, verificationStatus: newVer as any };
+    const newVer: Shopkeeper['verificationStatus'] = verified ? 'verified' : 'unverified';
+    const updated = { ...selectedShopkeeper, verificationStatus: newVer };
     setSelectedShopkeeper(updated);
     setShopkeepers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     setActionStatusMsg(`Shopkeeper verification updated to ${newVer.toUpperCase()}`);
@@ -194,9 +226,30 @@ export default function ShopkeepersPage() {
       {/* Shopkeepers Table */}
       <div className="bg-[#12121a] border border-[#2a2a38] rounded-2xl shadow-xl overflow-hidden">
         {loading ? (
-          <div className="p-12 text-center text-slate-400">Loading Shopkeeper directory...</div>
+          <div className="p-12 text-center text-slate-400 flex items-center justify-center gap-3">
+            <div className="w-6 h-6 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+            Loading shopkeepers...
+          </div>
+        ) : loadError ? (
+          <div className="p-12 text-center">
+            <AlertCircle size={34} className="mx-auto mb-3 text-rose-400 opacity-70" />
+            <div className="text-slate-300 font-semibold">Unable to load data</div>
+            <div className="text-xs text-slate-500 mt-1">Please try again.</div>
+            <button
+              onClick={() => {
+                setLoadError(false);
+                fetchShopkeepers();
+              }}
+              className="mt-4 px-4 py-2 rounded-xl bg-[#181824] border border-[#2c2c3e] text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         ) : shopkeepers.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">No shopkeepers found matching query criteria.</div>
+          <div className="p-12 text-center">
+            <div className="text-slate-300 font-semibold">No shopkeepers found.</div>
+            <div className="text-xs text-slate-500 mt-1">Try changing your search or filters.</div>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-300">
@@ -384,7 +437,7 @@ export default function ShopkeepersPage() {
                   )}
                   {selectedShopkeeper.status !== 'suspended' && (
                     <button
-                      onClick={() => handleStatusUpdate('suspended')}
+                      onClick={() => setConfirmSuspend(true)}
                       className="px-3 py-1.5 rounded-lg bg-rose-600/30 border border-rose-500/40 text-rose-300 hover:bg-rose-600/50 text-xs font-medium transition-colors"
                     >
                       Suspend Shop
@@ -430,6 +483,47 @@ export default function ShopkeepersPage() {
                         <div className="text-white font-medium">{selectedShopkeeper.address}</div>
                       </div>
                     </div>
+
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436] flex items-center gap-3">
+                      <MapPin size={16} className="text-indigo-400" />
+                      <div>
+                        <div className="text-slate-400">Location / City</div>
+                        <div className="text-white font-medium">{selectedShopkeeper.location}</div>
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436] flex items-center gap-3">
+                      <Store size={16} className="text-indigo-400" />
+                      <div>
+                        <div className="text-slate-400">Owner</div>
+                        <div className="text-white font-medium">{selectedShopkeeper.ownerName}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Store Hours (existing fields previously not displayed) */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Store Hours</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436] flex items-center gap-3">
+                      <Clock size={16} className="text-emerald-400" />
+                      <div>
+                        <div className="text-slate-400">Opening Time</div>
+                        <div className="text-white font-medium">{selectedShopkeeper.openingTime}</div>
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436] flex items-center gap-3">
+                      <Clock size={16} className="text-amber-400" />
+                      <div>
+                        <div className="text-slate-400">Closing Time</div>
+                        <div className="text-white font-medium">{selectedShopkeeper.closingTime}</div>
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-slate-400 mb-1">Working Days</div>
+                      <div className="text-white font-medium">{selectedShopkeeper.workingDays.join(', ')}</div>
+                    </div>
                   </div>
                 </div>
 
@@ -454,6 +548,18 @@ export default function ShopkeepersPage() {
                       <div className="text-base font-bold text-yellow-400 mt-1 flex items-center justify-center gap-1">
                         <Star size={14} fill="currentColor" /> {selectedShopkeeper.rating ?? 4.8}
                       </div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Total Orders</div>
+                      <div className="text-base font-bold text-white mt-1">{selectedShopkeeper.totalOrders}</div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Cancelled Orders</div>
+                      <div className="text-base font-bold text-rose-400 mt-1">{selectedShopkeeper.cancelledOrders}</div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[#181824] border border-[#242436]">
+                      <div className="text-xs text-slate-400">Avg. Order Value</div>
+                      <div className="text-base font-bold text-indigo-400 mt-1">{formatCurrency(selectedShopkeeper.averageOrderValue)}</div>
                     </div>
                   </div>
                 </div>
@@ -499,6 +605,20 @@ export default function ShopkeepersPage() {
           </div>
         </div>
       )}
+
+      {/* Destructive action confirmation (§18) */}
+      <ConfirmModal
+        open={confirmSuspend && selectedShopkeeper !== null}
+        onClose={() => setConfirmSuspend(false)}
+        title="Suspend this shop?"
+        description={`${selectedShopkeeper?.shopName ?? 'This shop'} will stop receiving new orders until it is reactivated.`}
+        confirmLabel="Suspend Shop"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmSuspend(false);
+          handleStatusUpdate('suspended');
+        }}
+      />
     </div>
   );
 }
