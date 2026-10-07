@@ -5,7 +5,7 @@ import {
   Store, Search, ArrowUpDown, CheckCircle2, Clock,
   MapPin, Phone, Mail, Eye, ShieldCheck, Star, DollarSign, X, AlertCircle
 } from 'lucide-react';
-import { getShopkeepers, getShopkeeperOrders } from '@/lib/api';
+import { getShopkeepers, getShopkeeperOrders, updateShopkeeper } from '@/lib/api';
 import { Shopkeeper, ShopkeeperStatus } from '@/types/shopkeeper';
 import { Order } from '@/types/order';
 import {
@@ -108,8 +108,15 @@ export default function ShopkeepersPage() {
     const updated = { ...selectedShopkeeper, status: newStatus };
     setSelectedShopkeeper(updated);
     setShopkeepers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-    setActionStatusMsg(`Shopkeeper status updated to ${newStatus.toUpperCase()}`);
-    setTimeout(() => setActionStatusMsg(null), 3000);
+    updateShopkeeper(updated.id, { status: newStatus })
+      .then(() => setActionStatusMsg(`Shopkeeper status updated to ${newStatus.toUpperCase()}`))
+      .catch((err) => {
+        console.error('Failed to persist shopkeeper status:', err);
+        setActionStatusMsg('Failed to save shopkeeper status.');
+      })
+      .finally(() => {
+        setTimeout(() => setActionStatusMsg(null), 3000);
+      });
   };
 
   const handleVerificationUpdate = (verified: boolean) => {
@@ -118,8 +125,15 @@ export default function ShopkeepersPage() {
     const updated = { ...selectedShopkeeper, verificationStatus: newVer };
     setSelectedShopkeeper(updated);
     setShopkeepers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-    setActionStatusMsg(`Shopkeeper verification updated to ${newVer.toUpperCase()}`);
-    setTimeout(() => setActionStatusMsg(null), 3000);
+    updateShopkeeper(updated.id, { verificationStatus: newVer })
+      .then(() => setActionStatusMsg(`Shopkeeper verification updated to ${newVer.toUpperCase()}`))
+      .catch((err) => {
+        console.error('Failed to persist shopkeeper verification:', err);
+        setActionStatusMsg('Failed to save verification status.');
+      })
+      .finally(() => {
+        setTimeout(() => setActionStatusMsg(null), 3000);
+      });
   };
 
   return (

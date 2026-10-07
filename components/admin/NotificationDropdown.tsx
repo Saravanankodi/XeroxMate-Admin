@@ -4,38 +4,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { LucideIcon } from 'lucide-react';
 import {
-  UserPlus, Store, ShoppingBag, CheckCircle, CheckCircle2, XCircle, AlertCircle,
-  CreditCard, ShieldOff, Wallet, Clock, Activity, RotateCcw
+  CheckCircle2, XCircle, AlertCircle,
+  CreditCard, Wallet, Clock, Activity, RotateCcw
 } from 'lucide-react';
-import { ActivityItem } from '@/types/analytics';
 import type { FinanceNotification, FinanceNotificationType } from '@/types/payment';
 import { formatRelativeTime } from '@/lib/utils';
 import { getFinanceNotifications, markFinanceNotificationsRead, subscribeFinance } from '@/lib/finance/api';
+import { ensureFinanceStream } from '@/lib/finance/realtime';
 
 interface IconCfg {
   icon: LucideIcon;
   color: string;
   bg: string;
 }
-
-const mockNotifications: ActivityItem[] = [
-  { id: 'N-001', type: 'user_registered', title: 'New user registered', subtitle: 'Dhinesh Prabu joined XEROXMATE', timestamp: '2026-09-12T08:00:00Z', entityId: 'USR-035', entityType: 'user' },
-  { id: 'N-002', type: 'order_placed', title: 'New order placed', subtitle: 'OMX-1033 — Murugan Vel', timestamp: '2026-09-12T17:50:00Z', entityId: 'OMX-1033', entityType: 'order' },
-  { id: 'N-003', type: 'shopkeeper_registered', title: 'New shopkeeper pending', subtitle: 'Nandu Xerox — awaiting approval', timestamp: '2026-09-05T13:00:00Z', entityId: 'SHOP-014', entityType: 'shopkeeper' },
-  { id: 'N-004', type: 'order_cancelled', title: 'Order cancelled', subtitle: 'OMX-1043 was cancelled', timestamp: '2026-09-10T18:25:00Z', entityId: 'OMX-1043', entityType: 'order' },
-  { id: 'N-005', type: 'shopkeeper_suspended', title: 'Shopkeeper suspended', subtitle: 'FastPrint Solutions — high cancellation rate', timestamp: '2026-09-01T10:00:00Z', entityId: 'SHOP-011', entityType: 'shopkeeper' },
-];
-
-const mockCfg: Record<ActivityItem['type'], IconCfg> = {
-  user_registered:       { icon: UserPlus,    color: '#60a5fa', bg: 'rgba(59,130,246,0.12)' },
-  shopkeeper_registered: { icon: Store,       color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
-  order_placed:          { icon: ShoppingBag, color: '#818cf8', bg: 'rgba(99,102,241,0.12)' },
-  order_accepted:        { icon: CheckCircle, color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
-  order_delivered:       { icon: CheckCircle, color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-  order_cancelled:       { icon: XCircle,     color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
-  payment_received:      { icon: CreditCard,  color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
-  shopkeeper_suspended:  { icon: ShieldOff,   color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
-};
 
 const financeCfg: Record<FinanceNotificationType, IconCfg> = {
   payment_received:             { icon: CreditCard,   color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
@@ -70,10 +51,11 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
   const router = useRouter();
 
   const [financeNotifs, setFinanceNotifs] = useState<FinanceNotification[]>([]);
-  const [mockRead, setMockRead] = useState(false);
   const [marking, setMarking] = useState(false);
 
   useEffect(() => {
+    ensureFinanceStream();
+
     const load = () => {
       getFinanceNotifications('admin')
         .then(setFinanceNotifs)
@@ -97,7 +79,6 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
     markFinanceNotificationsRead()
       .then(() => {
         setFinanceNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
-        setMockRead(true);
       })
       .catch(() => undefined)
       .finally(() => setMarking(false));
@@ -113,16 +94,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
     href: n.entityType === 'payment' ? '/admin/payments' : '/admin/payouts',
   }));
 
-  const mockItems: DisplayItem[] = mockNotifications.map((notif, i) => ({
-    id: notif.id,
-    title: notif.title,
-    subtitle: notif.subtitle,
-    timestamp: notif.timestamp,
-    cfg: mockCfg[notif.type],
-    unread: !mockRead && i < 3,
-  }));
-
-  const items = [...financeItems, ...mockItems].sort(
+  const items = [...financeItems].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
   const unreadCount = items.filter((it) => it.unread).length;

@@ -5,7 +5,7 @@ import {
   ShoppingBag, Search, ArrowUpDown, CheckCircle2, Store,
   User, DollarSign, FileText, Printer, Eye, X, AlertCircle, Truck, CreditCard
 } from 'lucide-react';
-import { getOrders } from '@/lib/api';
+import { getOrders, updateOrderStatus } from '@/lib/api';
 import { syncOrderPayment, toFinanceMessage, getPayments } from '@/lib/finance/api';
 import { Order, OrderStatus, PaymentStatus, DeliveryType } from '@/types/order';
 import type { Payment } from '@/types/payment';
@@ -109,8 +109,15 @@ export default function OrdersPage() {
     };
     setSelectedOrder(updated);
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
-    setStatusActionMsg(`Order status updated to ${newStatus.toUpperCase()}`);
-    setTimeout(() => setStatusActionMsg(null), 3000);
+    updateOrderStatus(updated.id, newStatus)
+      .then(() => setStatusActionMsg(`Order status updated to ${newStatus.toUpperCase()}`))
+      .catch((err) => {
+        console.error('Failed to persist order status:', err);
+        setStatusActionMsg('Failed to save order status.');
+      })
+      .finally(() => {
+        setTimeout(() => setStatusActionMsg(null), 3000);
+      });
   };
 
   const handleUpdatePaymentStatus = (newPayStatus: PaymentStatus) => {

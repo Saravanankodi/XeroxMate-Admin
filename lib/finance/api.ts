@@ -1,9 +1,11 @@
 /**
  * Finance service layer — async API used by the Admin UI.
  *
- * Mirrors the rest of the console's service layer (`lib/api.ts`) but every
- * write path is delegated to the finance store under a serialised lock so
- * all financial rules are enforced in one authoritative place.
+ * Every call goes through the `/api/*` route handlers (`lib/server/finance/*`
+ * on the server), so the browser never talks to Firestore. Domain failures
+ * arrive as `{ error, code }` and are re-hydrated into `FinanceError` so
+ * `toFinanceMessage` surfaces the real user-facing text. Successful mutations
+ * emit a store event so `useFinanceSync` screens refetch.
  */
 
 import type { TimeRange } from '@/types/analytics';
@@ -13,11 +15,11 @@ import type {
   AuditLogFilters,
   CommissionPoint,
   FinanceNotification,
+  FinanceNotificationAudience,
   FinanceStatusShare,
   FinancialStats,
   Payment,
   PaymentFilters,
-  PaymentMethod,
   PaymentMethodShare,
   PaymentVolumePoint,
   PayoutFilters,
@@ -27,62 +29,76 @@ import type {
   ShopkeeperPayoutPoint,
 } from '@/types/payment';
 import type { PaginatedResult } from '@/lib/api';
-import { CURRENT_ADMIN, financeDelay } from './config';
-import { toFinanceMessage } from './errors';
-import * as store from './store';
-import { subscribeFinance } from './store';
+import { ApiError, apiGet, apiSend, buildQuery } from '@/lib/api/client';
+import { CURRENT_ADMIN } from './config';
+import { FinanceError, toFinanceMessage, type FinanceErrorCode } from './errors';
+import { emitFinance, subscribeFinance } from './store';
 
-const RANGE_DAYS: Record<TimeRange, number> = {
-  '7d': 7,
-  '30d': 30,
-  '3m': 90,
-  '6m': 180,
-  '1y': 365,
-};
+const FINANCE_CODES: ReadonlySet<string> = new Set<FinanceErrorCode>([
+  'PAYMENT_NOT_FOUND',
+  'PAYMENT_ALREADY_VERIFIED',
+  'PAYMENT_ALREADY_DECLINED',
+  'PAYMENT_ALREADY_PROCESSED',
+  'PAYMENT_LOCKED_BY_PAYOUT',
+  'PAYMENT_REFUNDED',
+  'PAYOUT_NOT_FOUND',
+  'PAYOUT_INVALID_STATE',
+  'PAYOUT_IN_PROGRESS',
+  'DUPLICATE_REQUEST',
+  'INSUFFICIENT_BALANCE',
+  'BELOW_MINIMUM',
+  'INVALID_AMOUNT',
+  'SHOPKEEPER_NOT_FOUND',
+  'COMMISSION_RATE_INVALID',
+  'NETWORK_FAILURE',
+  'UNAUTHORIZED',
+]);
 
-const METHOD_LABELS: Record<PaymentMethod, string> = {
-  upi: 'UPI',
-  card: 'Card',
-  net_banking: 'Net Banking',
-  wallet: 'Wallet',
-  cod: 'Cash on Delivery',
-};
+function domainError(error: unknown): FinanceError {
+  if (error instanceof FinanceError) {
+    return error;
+  }
 
-function paginate<T>(list: T[], page = 1, pageSize = 10): PaginatedResult<T> {
-  const total = list.length;
-  const totalPages = Math.ceil(total / pageSize) || 1;
-  const current = Math.min(Math.max(page, 1), totalPages);
-  return {
-    data: list.slice((current - 1) * pageSize, current * pageSize),
-    total,
-    page: current,
-    pageSize,
-    totalPages,
-  };
+  if (
+    error instanceof ApiError &&
+    error.code !== undefined &&
+    FINANCE_CODES.has(error.code)
+  ) {
+    return new FinanceError(
+      error.code as FinanceErrorCode,
+      error.message
+    );
+  }
+
+  return new FinanceError('NETWORK_FAILURE');
 }
 
-function dateOnly(iso: string): string {
-  return iso.slice(0, 10);
-}
-
-async function run<T>(fn: () => T, ms = 220): Promise<T> {
-  await financeDelay(ms);
+async function get<T>(path: string): Promise<T> {
   try {
-    return fn();
-  } catch (err) {
-    throw err instanceof Error ? err : new Error(toFinanceMessage(err));
+    return await apiGet<T>(path);
+  } catch (error) {
+    throw domainError(error);
   }
 }
 
-async function mutate<T>(fn: () => T, ms = 320): Promise<T> {
-  await financeDelay(ms);
-  return store.withFinanceLock(() => {
-    try {
-      return fn();
-    } catch (err) {
-      throw err instanceof Error ? err : new Error(toFinanceMessage(err));
-    }
-  });
+async function send<T>(
+  method: 'POST' | 'PATCH',
+  path: string,
+  body?: unknown
+): Promise<T> {
+  try {
+    return await apiSend<T>(method, path, body);
+  } catch (error) {
+    throw domainError(error);
+  }
+}
+
+function paymentPath(id: string): string {
+  return `/api/payments/${encodeURIComponent(id)}`;
+}
+
+function payoutPath(id: string): string {
+  return `/api/payouts/${encodeURIComponent(id)}`;
 }
 
 // ─── Payments ────────────────────────────────────────────────────────────────
@@ -139,32 +155,59 @@ export function filterPayments(payments: Payment[], filters: PaymentFilters = {}
   return result;
 }
 
-export async function getPayments(filters: PaymentFilters = {}): Promise<PaginatedResult<Payment>> {
-  return run(() => paginate(filterPayments(store.state.payments, filters), filters.page, filters.pageSize));
+export function getPayments(filters: PaymentFilters = {}): Promise<PaginatedResult<Payment>> {
+  return get<PaginatedResult<Payment>>(`/api/payments${buildQuery(filters)}`);
 }
 
 export async function getPaymentById(id: string): Promise<Payment | null> {
-  return run(() => store.state.payments.find((p) => p.id === id) ?? null, 150);
+  try {
+    return await apiGet<Payment>(paymentPath(id));
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+
+    throw domainError(error);
+  }
 }
 
 export async function verifyPaymentById(id: string, options: { note?: string } = {}): Promise<Payment> {
-  return mutate(() => store.verifyPayment(id, options));
+  const payment = await send<Payment>('PATCH', paymentPath(id), {
+    action: 'verify',
+    note: options.note,
+  });
+  emitFinance();
+  return payment;
 }
 
 export async function declinePaymentById(
   id: string,
   options: { reason: string; otherReason?: string; note?: string }
 ): Promise<Payment> {
-  return mutate(() => store.declinePayment(id, options));
+  const payment = await send<Payment>('PATCH', paymentPath(id), {
+    action: 'decline',
+    reason: options.reason,
+    otherReason: options.otherReason,
+    note: options.note,
+  });
+  emitFinance();
+  return payment;
 }
 
 export async function refundPaymentById(id: string, options: { reason?: string } = {}): Promise<Payment> {
-  return mutate(() => store.refundPayment(id, options));
+  const payment = await send<Payment>('PATCH', paymentPath(id), {
+    action: 'refund',
+    reason: options.reason,
+  });
+  emitFinance();
+  return payment;
 }
 
 /** Automatic payment recording when an order is settled — never keyed in manually. */
 export async function syncOrderPayment(order: Order): Promise<Payment | null> {
-  return mutate(() => store.recordOrderPaymentChange(order), 120);
+  const result = await send<{ payment: Payment | null }>('POST', '/api/payments/sync', { order });
+  emitFinance();
+  return result.payment;
 }
 
 // ─── Payouts ─────────────────────────────────────────────────────────────────
@@ -215,37 +258,35 @@ export function filterPayouts(requests: PayoutRequest[], filters: PayoutFilters 
   return result;
 }
 
-export async function getPayoutRequests(filters: PayoutFilters = {}): Promise<PaginatedResult<PayoutRequest>> {
-  return run(() => paginate(filterPayouts(store.state.payoutRequests, filters), filters.page, filters.pageSize));
+export function getPayoutRequests(filters: PayoutFilters = {}): Promise<PaginatedResult<PayoutRequest>> {
+  return get<PaginatedResult<PayoutRequest>>(`/api/payouts${buildQuery(filters)}`);
 }
 
 export async function getPayoutRequestById(id: string): Promise<PayoutRequest | null> {
-  return run(() => store.state.payoutRequests.find((r) => r.id === id) ?? null, 150);
+  try {
+    return await apiGet<PayoutRequest>(payoutPath(id));
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+
+    throw domainError(error);
+  }
 }
 
 /** Verified customer payments backing a payout request (audit traceability). */
-export async function getPayoutContributingPayments(request: PayoutRequest): Promise<Payment[]> {
-  return run(() => {
-    const payments = store.state.payments;
-    if (request.paymentIds.length > 0) {
-      return request.paymentIds
-        .map((id) => payments.find((p) => p.id === id))
-        .filter((p): p is Payment => Boolean(p));
-    }
-    return payments
-      .filter((p) => p.shopkeeperId === request.shopkeeperId && p.verificationStatus === 'verified')
-      .sort((a, b) => new Date(a.paymentDate).getTime() - new Date(b.paymentDate).getTime());
-  }, 180);
+export function getPayoutContributingPayments(request: PayoutRequest): Promise<Payment[]> {
+  return send<Payment[]>('POST', '/api/payouts/contributing', {
+    shopkeeperId: request.shopkeeperId,
+    paymentIds: request.paymentIds,
+  });
 }
 
 export async function getShopkeeperPayoutHistory(shopkeeperId: string): Promise<PayoutRequest[]> {
-  return run(
-    () =>
-      store.state.payoutRequests
-        .filter((r) => r.shopkeeperId === shopkeeperId)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    180
+  const result = await get<PaginatedResult<PayoutRequest>>(
+    `/api/payouts${buildQuery({ shopkeeperId, all: 1 })}`
   );
+  return result.data;
 }
 
 export interface PayoutRequestInput {
@@ -256,56 +297,84 @@ export interface PayoutRequestInput {
 }
 
 export async function createPayoutRequest(input: PayoutRequestInput): Promise<PayoutRequest> {
-  return mutate(() => store.requestPayout(input));
+  const payout = await send<PayoutRequest>('POST', '/api/payouts', input);
+  emitFinance();
+  return payout;
 }
 
-export async function holdPayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
-  return mutate(() => store.holdPayout(id, options));
+function payoutAction(
+  action:
+    | 'hold'
+    | 'approve'
+    | 'process'
+    | 'complete'
+    | 'reject'
+    | 'fail'
+    | 'cancel',
+  id: string,
+  options: { note?: string; reason?: string; reference?: string } = {}
+): Promise<PayoutRequest> {
+  return send<PayoutRequest>('PATCH', payoutPath(id), {
+    action,
+    ...options,
+  }).then((payout) => {
+    emitFinance();
+    return payout;
+  });
 }
 
-export async function approvePayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
-  return mutate(() => store.approvePayout(id, options));
+export function holdPayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
+  return payoutAction('hold', id, options);
 }
 
-export async function processPayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
-  return mutate(() => store.processPayout(id, options));
+export function approvePayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
+  return payoutAction('approve', id, options);
 }
 
-export async function completePayoutById(
+export function processPayoutById(id: string, options: { note?: string } = {}): Promise<PayoutRequest> {
+  return payoutAction('process', id, options);
+}
+
+export function completePayoutById(
   id: string,
   options: { reference?: string; note?: string } = {}
 ): Promise<PayoutRequest> {
-  return mutate(() => store.completePayout(id, options));
+  return payoutAction('complete', id, options);
 }
 
-export async function rejectPayoutById(id: string, options: { reason: string; note?: string }): Promise<PayoutRequest> {
-  return mutate(() => store.rejectPayout(id, options));
+export function rejectPayoutById(id: string, options: { reason: string; note?: string }): Promise<PayoutRequest> {
+  return payoutAction('reject', id, options);
 }
 
-export async function failPayoutById(id: string, options: { reason: string; note?: string }): Promise<PayoutRequest> {
-  return mutate(() => store.failPayout(id, options));
+export function failPayoutById(id: string, options: { reason: string; note?: string }): Promise<PayoutRequest> {
+  return payoutAction('fail', id, options);
 }
 
-export async function cancelPayoutById(id: string, options: { reason?: string } = {}): Promise<PayoutRequest> {
-  return mutate(() => store.cancelPayout(id, options));
+export function cancelPayoutById(id: string, options: { reason?: string } = {}): Promise<PayoutRequest> {
+  return payoutAction('cancel', id, options);
 }
 
 export async function addPayoutNoteById(id: string, note: string): Promise<PayoutRequest> {
-  return mutate(() => store.addPayoutNote(id, note));
+  const payout = await send<PayoutRequest>('PATCH', payoutPath(id), { action: 'addNote', note });
+  emitFinance();
+  return payout;
 }
 
 // ─── Ledger & configuration ──────────────────────────────────────────────────
 
-export async function getShopkeeperBalances(): Promise<ShopkeeperBalance[]> {
-  return run(() => store.allBalances(), 200);
+export function getShopkeeperBalances(): Promise<ShopkeeperBalance[]> {
+  return get<ShopkeeperBalance[]>('/api/balances');
 }
 
 export async function getCommissionRate(): Promise<number> {
-  return run(() => store.state.commissionRate, 100);
+  const result = await get<{ rate: number }>('/api/commission');
+  return result.rate;
 }
 
 export async function updateCommissionRate(rate: number): Promise<number> {
-  return mutate(() => store.setCommissionRate(rate));
+  const result = await send<{ rate: number }>('PATCH', '/api/commission', { rate });
+  emitFinance();
+  return result.rate;
 }
 
 export function getCurrentAdmin() {
@@ -314,53 +383,32 @@ export function getCurrentAdmin() {
 
 // ─── Statistics & charts ─────────────────────────────────────────────────────
 
-export async function getFinancialStats(): Promise<FinancialStats> {
-  return run(() => store.computeStats(), 240);
+export function getFinancialStats(): Promise<FinancialStats> {
+  return get<FinancialStats>('/api/finance/stats');
 }
 
-export async function getPaymentVolume(range: TimeRange): Promise<PaymentVolumePoint[]> {
-  return run(() => store.paymentVolumeSeries(RANGE_DAYS[range]), 260);
+export function getPaymentVolume(range: TimeRange): Promise<PaymentVolumePoint[]> {
+  return get<PaymentVolumePoint[]>(`/api/finance/volume${buildQuery({ range })}`);
 }
 
-export async function getCommissionTrend(range: TimeRange): Promise<CommissionPoint[]> {
-  return run(() => store.commissionSeries(RANGE_DAYS[range]), 260);
+export function getCommissionTrend(range: TimeRange): Promise<CommissionPoint[]> {
+  return get<CommissionPoint[]>(`/api/finance/commission-trend${buildQuery({ range })}`);
 }
 
-export async function getPaymentStatusDistribution(): Promise<FinanceStatusShare[]> {
-  return run(() => store.statusDistribution('payment'), 180);
+export function getPaymentStatusDistribution(): Promise<FinanceStatusShare[]> {
+  return get<FinanceStatusShare[]>('/api/finance/distribution?kind=paymentStatus');
 }
 
-export async function getPayoutStatusDistribution(): Promise<FinanceStatusShare[]> {
-  return run(() => store.statusDistribution('payout'), 180);
+export function getPayoutStatusDistribution(): Promise<FinanceStatusShare[]> {
+  return get<FinanceStatusShare[]>('/api/finance/distribution?kind=payoutStatus');
 }
 
-export async function getPaymentMethodDistribution(): Promise<PaymentMethodShare[]> {
-  return run(() => {
-    const groups = new Map<PaymentMethod, { count: number; amount: number }>();
-    let totalAmount = 0;
-    store.state.payments
-      .filter((p) => p.paymentStatus !== 'declined')
-      .forEach((p) => {
-        const entry = groups.get(p.paymentMethod) ?? { count: 0, amount: 0 };
-        entry.count += 1;
-        entry.amount = Math.round((entry.amount + p.grossAmount) * 100) / 100;
-        groups.set(p.paymentMethod, entry);
-        totalAmount += p.grossAmount;
-      });
-    return Array.from(groups.entries())
-      .map(([method, v]) => ({
-        method,
-        label: METHOD_LABELS[method],
-        count: v.count,
-        amount: Math.round(v.amount * 100) / 100,
-        percentage: totalAmount > 0 ? Math.round((v.amount / totalAmount) * 100) : 0,
-      }))
-      .sort((a, b) => b.amount - a.amount);
-  }, 200);
+export function getPaymentMethodDistribution(): Promise<PaymentMethodShare[]> {
+  return get<PaymentMethodShare[]>('/api/finance/distribution?kind=paymentMethod');
 }
 
-export async function getShopkeeperPayoutTop(limit = 6): Promise<ShopkeeperPayoutPoint[]> {
-  return run(() => store.shopkeeperPayoutTop(limit), 200);
+export function getShopkeeperPayoutTop(limit = 6): Promise<ShopkeeperPayoutPoint[]> {
+  return get<ShopkeeperPayoutPoint[]>(`/api/finance/distribution${buildQuery({ kind: 'topPayouts', limit })}`);
 }
 
 // ─── Audit log ───────────────────────────────────────────────────────────────
@@ -388,43 +436,32 @@ export function filterAuditLogs(logs: AuditLogEntry[], filters: AuditLogFilters 
   return result;
 }
 
-export async function getAuditLogs(filters: AuditLogFilters = {}): Promise<PaginatedResult<AuditLogEntry>> {
-  return run(() => paginate(filterAuditLogs(store.state.auditLogs, filters), filters.page, filters.pageSize ?? 12));
+export function getAuditLogs(filters: AuditLogFilters = {}): Promise<PaginatedResult<AuditLogEntry>> {
+  return get<PaginatedResult<AuditLogEntry>>(`/api/audit${buildQuery(filters)}`);
 }
 
-export async function getAuditLogsForEntity(
+export function getAuditLogsForEntity(
   entity: { paymentId?: string; payoutRequestId?: string }
 ): Promise<AuditLogEntry[]> {
-  return run(
-    () =>
-      store.state.auditLogs
-        .filter(
-          (l) =>
-            (entity.paymentId && l.paymentId === entity.paymentId) ||
-            (entity.payoutRequestId && l.payoutRequestId === entity.payoutRequestId)
-        )
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-    140
-  );
+  return get<AuditLogEntry[]>(`/api/audit/entity${buildQuery(entity)}`);
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
 
-export async function getFinanceNotifications(
-  audience: 'admin' | 'shopkeeper' | 'customer' = 'admin'
+export function getFinanceNotifications(
+  audience: FinanceNotificationAudience = 'admin'
 ): Promise<FinanceNotification[]> {
-  return run(
-    () =>
-      store.state.notifications
-        .filter((n) => n.audience === audience)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-    120
-  );
+  return get<FinanceNotification[]>(`/api/finance/notifications${buildQuery({ audience })}`);
 }
 
 export async function markFinanceNotificationsRead(): Promise<void> {
-  return mutate(() => store.markNotificationsRead(), 80);
+  await send<{ success: boolean }>('PATCH', '/api/finance/notifications');
+  emitFinance();
 }
 
-export { store as financeStore, subscribeFinance };
+export { subscribeFinance };
 export { toFinanceMessage };
+
+function dateOnly(iso: string): string {
+  return iso.slice(0, 10);
+}

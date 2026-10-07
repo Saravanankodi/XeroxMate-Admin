@@ -22,8 +22,3 @@ export const CURRENT_ADMIN: AdminIdentity = {
 export const DEFAULT_COMMISSION_RATE = 10;
 
 export const COMMISSION_RATE_BOUNDS = { min: 0, max: 50 };
-
-/** Simulated network latency so the finance UI matches the rest of the console. */
-export function financeDelay(ms = 250): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
