@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Menu, Bell, Search, ChevronDown, User, Settings, LogOut } from 'lucide-react';
 import GlobalSearch from './GlobalSearch';
 import NotificationDropdown from './NotificationDropdown';
+import { logoutAdmin } from '@/lib/firebase/logout';
 
 interface AdminHeaderProps {
   title: string;
@@ -84,7 +85,7 @@ export default function AdminHeader({ title, description, onMenuClick }: AdminHe
                     <Settings size={14} /> Settings
                   </button>
                   <div className="border-t border-[#2a2a35] my-1" />
-                  <button className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-red-400 hover:bg-red-400/10 text-sm transition-colors">
+                  <button onClick={logoutAdmin} className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-red-400 hover:bg-red-400/10 text-sm transition-colors">
                     <LogOut size={14} /> Logout
                   </button>
                 </div>

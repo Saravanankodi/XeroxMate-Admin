@@ -7,6 +7,7 @@ import {
   Printer, LogOut, X, CreditCard, Wallet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { logoutAdmin } from '@/lib/firebase/logout';
 
 const navItems = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -103,7 +104,7 @@ export default function AdminSidebar({ open = true, onClose, isMobileDrawer = fa
             <div className="text-[#6b7280] text-xs truncate">Administrator</div>
           </div>
         </div>
-        <button className="flex items-center gap-3 px-3 py-2 mt-1 rounded-lg text-[#6b7280] hover:text-red-400 hover:bg-red-400/5 transition-all duration-150 w-full text-sm">
+        <button onClick={logoutAdmin} className="flex items-center gap-3 px-3 py-2 mt-1 rounded-lg text-[#6b7280] hover:text-red-400 hover:bg-red-400/5 transition-all duration-150 w-full text-sm">
           <LogOut size={15} />
           Logout
         </button>

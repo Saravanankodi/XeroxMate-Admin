@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
+import AdminLogin from "@/components/auth/AdminLogin";
 
 export default function Home() {
-  redirect('/admin/dashboard');
+  return <AdminLogin />;
 }
-
